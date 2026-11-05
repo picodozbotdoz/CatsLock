@@ -1,5 +1,7 @@
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
@@ -18,6 +20,7 @@ class CatLock : Form
     bool locked, ctrl, alt;
     Button btn = new Button();
     Label info = new Label();
+    NotifyIcon tray = new NotifyIcon();
 
     CatLock()
     {
@@ -26,6 +29,14 @@ class CatLock : Form
         TopMost = true;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
+        Icon = tray.Icon = MakeIcon();
+        tray.Text = "CatLock";
+        tray.Visible = true;
+        tray.DoubleClick += (s, e) => ShowWindow();
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Show", null, (s, e) => ShowWindow());
+        menu.Items.Add("Exit", null, (s, e) => Close());
+        tray.ContextMenuStrip = menu;
 
         btn.Dock = DockStyle.Fill;
         btn.Font = new Font("Segoe UI", 16, FontStyle.Bold);
@@ -50,6 +61,72 @@ class CatLock : Form
         btn.BackColor = v ? Color.IndianRed : Color.MediumSeaGreen;
         btn.ForeColor = Color.White;
         info.Text = v ? "Keyboard blocked. Use the mouse to unlock." : "Hotkey to lock: Ctrl+Alt+K";
+        if (v) ShowWindow();   // the mouse unlock button must be reachable
+    }
+
+    void ShowWindow()
+    {
+        Show();
+        WindowState = FormWindowState.Normal;
+        Activate();
+    }
+
+    // minimizing hides to the tray, but only while unlocked
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (WindowState != FormWindowState.Minimized) return;
+        if (locked) WindowState = FormWindowState.Normal;
+        else Hide();
+    }
+
+    static Icon MakeIcon() { return MakeIcon(32); }
+
+    static Icon MakeIcon(int n)
+    {
+        using (var bmp = new Bitmap(n, n))
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            float u = n / 32f;
+            var fur = new SolidBrush(Color.FromArgb(240, 150, 60));
+            var dark = new SolidBrush(Color.FromArgb(40, 40, 40));
+            g.FillPolygon(fur, new[] { new PointF(3 * u, 14 * u), new PointF(5 * u, 2 * u), new PointF(14 * u, 8 * u) });
+            g.FillPolygon(fur, new[] { new PointF(29 * u, 14 * u), new PointF(27 * u, 2 * u), new PointF(18 * u, 8 * u) });
+            g.FillPolygon(Brushes.Pink, new[] { new PointF(6 * u, 11 * u), new PointF(6.5f * u, 6 * u), new PointF(11 * u, 9 * u) });
+            g.FillPolygon(Brushes.Pink, new[] { new PointF(26 * u, 11 * u), new PointF(25.5f * u, 6 * u), new PointF(21 * u, 9 * u) });
+            g.FillEllipse(fur, 2 * u, 7 * u, 28 * u, 23 * u);
+            g.FillEllipse(Brushes.White, 7 * u, 13 * u, 7 * u, 8 * u);
+            g.FillEllipse(Brushes.White, 18 * u, 13 * u, 7 * u, 8 * u);
+            g.FillEllipse(dark, 9.5f * u, 14 * u, 3 * u, 6 * u);
+            g.FillEllipse(dark, 20.5f * u, 14 * u, 3 * u, 6 * u);
+            g.FillPolygon(Brushes.HotPink, new[] { new PointF(14 * u, 22 * u), new PointF(18 * u, 22 * u), new PointF(16 * u, 25 * u) });
+            using (var pen = new Pen(dark, Math.Max(1f, u)))
+            {
+                g.DrawLine(pen, 16 * u, 25 * u, 13 * u, 27 * u);
+                g.DrawLine(pen, 16 * u, 25 * u, 19 * u, 27 * u);
+                g.DrawLine(pen, 2 * u, 21 * u, 9 * u, 23 * u);
+                g.DrawLine(pen, 2 * u, 26 * u, 9 * u, 25 * u);
+                g.DrawLine(pen, 30 * u, 21 * u, 23 * u, 23 * u);
+                g.DrawLine(pen, 30 * u, 26 * u, 23 * u, 25 * u);
+            }
+            return Icon.FromHandle(bmp.GetHicon());
+        }
+    }
+
+    // writes a 256px PNG-in-ICO file, used to embed the icon in the exe at build time
+    static void WriteIco(string path)
+    {
+        var png = new MemoryStream();
+        using (var bmp = new Bitmap(MakeIcon(256).ToBitmap())) bmp.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+        using (var w = new BinaryWriter(File.Create(path)))
+        {
+            w.Write((short)0); w.Write((short)1); w.Write((short)1);
+            w.Write((byte)0); w.Write((byte)0); w.Write((byte)0); w.Write((byte)0);
+            w.Write((short)1); w.Write((short)32);
+            w.Write((int)png.Length); w.Write(22);
+            w.Write(png.ToArray());
+        }
     }
 
     IntPtr Hook(int code, IntPtr w, IntPtr l)
@@ -78,12 +155,15 @@ class CatLock : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         UnhookWindowsHookEx(hook);
+        tray.Visible = false;
+        tray.Dispose();
         base.OnFormClosed(e);
     }
 
     [STAThread]
-    static void Main()
+    static void Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--make-ico") { WriteIco(args[1]); return; }
         Application.EnableVisualStyles();
         Application.Run(new CatLock());
     }
